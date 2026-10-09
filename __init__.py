@@ -3,6 +3,8 @@
 Register GGUF node UIs without importing the optional GGUF implementation.
 Existing Iris safetensors sampler in nodes.py remains completely unchanged.
 """
+import os
+
 from .nodes import NODE_CLASS_MAPPINGS as _BASE_NODE_MAPPINGS
 from .nodes import NODE_DISPLAY_NAME_MAPPINGS as _BASE_DISPLAY_NAMES
 
@@ -13,8 +15,16 @@ class Iris3BGGUFCheckpoint:
     @classmethod
     def INPUT_TYPES(cls):
         import folder_paths
-        files = [f for f in folder_paths.get_filename_list("checkpoints")
-                 if f.lower().endswith(".gguf")]
+        # ComfyUI's normal checkpoints registry excludes .gguf extensions.
+        # Scan the existing checkpoint roots directly; do not change the
+        # registry or the original W4A8/FP32 checkpoint dropdown.
+        files = set()
+        for root in folder_paths.get_folder_paths("checkpoints"):
+            for directory, _subdirs, filenames in os.walk(root):
+                for filename in filenames:
+                    if filename.lower().endswith(".gguf"):
+                        files.add(os.path.relpath(os.path.join(directory, filename), root))
+        files = sorted(files, key=str.casefold)
         return {"required": {"checkpoint": (files or ["<no GGUF files>"],)}}
 
     RETURN_TYPES = ("IRIS3B_CHECKPOINT",)
