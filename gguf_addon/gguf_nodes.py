@@ -17,13 +17,8 @@ HERE = Path(__file__).resolve().parent
 
 
 def _iris_source():
-    """Find upstream Iris already installed with the user's base Iris node."""
-    base = HERE.parent
-    candidates = []
-    for sibling in base.iterdir():
-        if sibling.is_dir() and sibling.resolve() != HERE and "iris" in sibling.name.lower():
-            candidates.append(sibling / "third_party" / "iris-3b" / "src")
-    candidates += [HERE / "third_party" / "iris-3b" / "src"]
+    """Use the Iris source from this same ComfyUI node package."""
+    candidates = [HERE.parent / "third_party" / "iris-3b" / "src"]
     for src in candidates:
         if (src / "iris3b" / "config.py").is_file():
             if str(src) not in sys.path:
@@ -43,9 +38,9 @@ def _backend():
     """Load city96 modules from a sibling install without re-registering its nodes."""
     if "_iris_gguf_city96" in sys.modules:
         return sys.modules["_iris_gguf_city96"]
-    root = HERE.parent
+    root = HERE.parent.parent  # ComfyUI/custom_nodes, not the nested addon directory
     candidates = [root / "ComfyUI-GGUF", root / "comfyui-gguf"]
-    candidates += [p for p in root.glob("*GGUF*") if p.is_dir()]
+    candidates += [p for p in root.iterdir() if p.is_dir() and "gguf" in p.name.lower()]
     folder = next((p for p in candidates if (p / "loader.py").is_file() and (p / "ops.py").is_file() and (p / "dequant.py").is_file()), None)
     if folder is None:
         raise RuntimeError("Install city96/ComfyUI-GGUF under ComfyUI/custom_nodes before using Iris GGUF.")
@@ -87,10 +82,15 @@ def _linear_override(linear_class):
 
 
 def _build_model(cfg, IrisDiT, linear_class):
+    class IrisGGUFLinear(linear_class):
+        def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
+            super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
+            self._iris_bias_expected = bool(bias)
+
     original_initialize = IrisDiT.initialize_weights
     try:
         IrisDiT.initialize_weights = lambda self: None
-        with torch.device("meta"), _linear_override(linear_class):
+        with torch.device("meta"), _linear_override(IrisGGUFLinear):
             model = IrisDiT(cfg.model)
     finally:
         IrisDiT.initialize_weights = original_initialize
@@ -106,7 +106,7 @@ def _load_into_model(model, state_dict, backend):
     for name, mod in model.named_modules():
         if isinstance(mod, ggml_linear):
             expected.add(f"{name}.weight")
-            if mod.bias is not None:
+            if getattr(mod, "_iris_bias_expected", False):
                 expected.add(f"{name}.bias")
     incoming = set(state_dict)
     missing = sorted(expected - incoming)
