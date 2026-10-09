@@ -1,123 +1,87 @@
-# ComfyUI-Iris3B — W4A8 build
+# ComfyUI-Iris-3B
 
-## Model dropdown
+**Local Iris-3B image generation in ComfyUI — with FP32, W4A8/INT8 safetensors and an optional experimental GGUF addon.**
 
-Uses the normal ComfyUI folder:
+Created and maintained by **[Rebel AI](https://huggingface.co/realrebelai)**.
 
-```text
-ComfyUI/models/checkpoints/
+Iris-3B is an open-weights, 3-billion-parameter pixel-space diffusion transformer from [SperiLabs](https://huggingface.co/speridlabs/iris-3b). It generates RGB pixels directly without a VAE. These ComfyUI nodes adapt Iris's original architecture for local workflows, including memory-reduced checkpoints.
+
+> **Status:** The A/B Diagnostic safetensors pipeline has produced clean images at 1024×1024. GGUF support is **experimental** and has not yet completed a real-GPU quality test. Keep a backup of any known-good node installation before trying development versions.
+
+## Model formats
+
+| Format | Support | Notes |
+|---|---|---|
+| Original Iris FP32 `.safetensors` | Base nodes | Large memory footprint. |
+| Rebel AI W4A8 `.safetensors` | Base nodes | Uses native Comfy quantized Linear operations; odd-width INT8 layers use a safe per-layer dequantized matmul fallback. |
+| GGUF Q3_K_S / Q4_K_S / Q5_K_S / Q6_K | Optional `gguf_addon/` | Isolated sampler; quality and CUDA compatibility still under validation. |
+
+## Requirements
+
+- ComfyUI and Python 3.11+ with a CUDA-capable NVIDIA GPU.
+- `torch`, `transformers`, `omegaconf`, `safetensors`, `accelerate`, and Iris's upstream source code.
+- A working **Qwen3-VL-4B-Instruct** text encoder installation (downloaded from Hugging Face on first use).
+- For GGUF only: [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) installed separately.
+
+## Install base Iris nodes
+
+```bash
+git clone https://github.com/RealRebelAI/ComfyUI-Iris-3B.git ComfyUI-Iris3B
 ```
 
-No path boxes.
+Clone into `ComfyUI/custom_nodes/`, install dependencies into **ComfyUI's own Python environment**, and run the included `install_iris_source.py` once if you do not have the Iris source yet. This places upstream code in `third_party/iris-3b/src/` within the node folder, independent of machine-specific paths.
 
-## Supported diffusion checkpoints in this build
+Place the original Iris checkpoint or your W4A8 file under `ComfyUI/models/checkpoints/Iris-3B/`. The base nodes use ComfyUI's checkpoint dropdown; they do not require a typed filesystem path.
 
-- Standard Iris safetensors
-- Native Comfy **W4A8** (`asym_w4a8_int8`)
-- Native Comfy **INT8** when the checkpoint contains compatible Comfy quant metadata
-- GGUF is listed in the dropdown but the GGUF execution backend is still separate / not wired here
+The original author's model/config files are available at [speridlabs/iris-3b](https://huggingface.co/speridlabs/iris-3b). Use the checkpoint's own matching config when applicable.
 
-The W4A8 loader uses ComfyUI's `mixed_precision_ops` / `QuantizedTensor` path.
-Packed 4-bit matrices stay packed instead of being loaded into ordinary
-`torch.nn.Linear`.
-
-The loader accepts both:
-1. standard `_quantization_metadata` in the safetensors header, and
-2. Rebel W4A8 files containing `weight_s_rel` scales even if metadata has to be reconstructed.
-
-The fallback reconstruction matches this Iris recipe:
+## Working text-to-image workflow
 
 ```text
-group_size = 16
-convrot_groupsize = 256
-format = asym_w4a8_int8
+Iris 3B Checkpoint ─────┬─> Iris 3B Qwen3-VL Encode
+                        └─> Iris 3B Sampler <── conditioning
+                                        │
+                                        └─> Save Image
 ```
 
-## Iris source
+**Reference settings:** 1024×1024 (or a native ~1MP aspect ratio), 100 steps, CFG 3, shift 4, order 2, BF16 autocast. The author showcases generation at approximately one megapixel; reducing the resolution drastically produced visible block/grid artifacts during our early tests.
 
-Keep the upstream source inside the node package:
+## GGUF — optional isolated addon
+
+The `gguf_addon/` directory is **not part of the base node implementation**. Install its contents as a separate ComfyUI custom-node folder:
 
 ```text
-ComfyUI-Iris3B/third_party/iris-3b/src/
+ComfyUI/custom_nodes/
+  ComfyUI-Iris3B/             # Existing base nodes, leave unchanged
+  ComfyUI-GGUF/               # city96 backend
+  ComfyUI-Iris3B-GGUF-Addon/  # Copy the files from gguf_addon/ here
 ```
 
-## Terminal progress
+Then choose the **Iris 3B GGUF Checkpoint** and feed its output to the **existing Iris 3B Qwen3-VL Encode** node and to the **Iris 3B GGUF Sampler (Experimental)**. The addon uses unique node IDs and doesn't replace or rewrite the W4A8/FP32 sampler.
 
-```text
-[Iris3B] quantized checkpoint detected: ... quantized Linear layers
-[Iris3B] step 1/50
-[Iris3B] step 2/50
-...
-```
+GGUF files belong in `ComfyUI/models/checkpoints/Iris-3B/` and can be downloaded from [Rebel AI's Iris GGUF repository](https://huggingface.co/realrebelai/iris-3b_GGUFs). A custom Iris-specific ComfyUI backend is required — these GGUFs are not llama.cpp chat models.
 
-## First W4A8 test
+For installation steps, use [gguf_addon/README.md](gguf_addon/README.md).
 
-```text
-512 x 512
-50 steps
-order 2
-CFG 3.0
-shift 4.0
-bfloat16
-unload_after = true
-```
+## Image restoration and editing
 
-This build fixes the diffusion-model W4A8 loader. The Qwen3-VL encoder is still
-the HF baseline path for now; local quantized Qwen3-VL is a separate next step.
+Iris's public release contains a **separate fine-tuned image restoration/upscaling model** (`upscaler/model.safetensors`, `empty_prompt.safetensors`, and `config.yaml`) and a monocular depth model. Those are **not interchangeable** with the base text-to-image checkpoint. An instruction-based img2img editor is **not implemented** in the current ComfyUI nodes; the existence of an upscaler should not be mistaken for an editing sampler.
 
+See the [original Iris model card](https://huggingface.co/speridlabs/iris-3b) for the official task definitions.
 
-## Iris odd-width INT8 fallback
+## Known limitations
 
-Iris uses an odd SwiGLU intermediate width of `6826`.
+- The W4A8 code is sensitive to model-specific quantization metadata; use tested converters and compatible ComfyUI releases.
+- Qwen3-VL is a separate, memory-intensive text encoder; `.gguf` here refers to **the diffusion model only**.
+- GGUF loading is experimental; checkpoint schema, tensor shapes, CUDA memory requirements, and final image quality should be tested on each release.
+- Native 1024px generation uses considerably more memory than 512px. Quantization does not eliminate activation memory usage.
+- Keep known-good versions backed up before installing updates.
 
-Some of those layers are stored as `int8_tensorwise` fallback weights by the
-W4A8 converter. NVIDIA/Comfy Kitchen INT8 GEMM requires matrix dimensions
-divisible by 4, while `6826 % 4 == 2`.
+## Links and credits
 
-This build detects incompatible INT8 layers and sets:
+- **Model:** [speridlabs/iris-3b](https://huggingface.co/speridlabs/iris-3b)
+- **Source:** [speridlabs/iris-3b](https://github.com/speridlabs/iris-3b)
+- **Quantized weights:** [realrebelai/iris-3b_GGUFs](https://huggingface.co/realrebelai/iris-3b_GGUFs)
+- **GGUF integration backend:** [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF)
 
-```text
-full_precision_matrix_mult = true
-```
-
-for those layers only. The weights remain quantized in the checkpoint, but
-Comfy dequantizes them for that individual matmul instead of calling the
-unsupported INT8 CUDA kernel.
-
-Compatible W4A8/INT8 layers still use their normal quantized paths.
-
-
-## W4A8 pixel-space precision fix
-
-This build changes Iris inference precision handling:
-
-- W4A8/INT8 weights remain packed and quantized.
-- The evolving pixel-space sample `x` remains FP32.
-- Iris conditioning is passed to the diffusion model as FP32.
-- Quantized Iris `mixed_precision_ops` are constructed with FP32 compute dtype.
-- Global CUDA BF16 autocast is disabled for the W4A8 diffusion pass.
-- Standard unquantized Iris keeps FP32 model weights and uses autocast, matching
-  the upstream execution pattern more closely.
-- The previous odd-width INT8 GEMM fallback remains included.
-
-This targets structured 16x16/block/checkerboard artifacts caused by applying a
-global low-precision path to Iris's pixel-space residual/output stages.
-
-
-## Upstream autocast execution fix
-
-The official Iris sampler keeps model/solver state in FP32 and wraps generation
-in CUDA BF16 autocast. Previous prototype builds deviated from this in two ways:
-
-- an early build cast the whole diffusion model to BF16;
-- the later W4A8 precision build disabled autocast for quantized inference.
-
-This build matches upstream sampling semantics:
-
-- integrator/noise state: FP32
-- conditioning passed to Iris: FP32
-- unquantized model weights: FP32
-- CUDA inference context: BF16 autocast
-- W4A8 packed weights: preserved
-- odd-width INT8 fallback: preserved
-- PixelFP checkpoints remain supported
+The original Iris code and weights are released under their respective license terms. Credit to SperiLabs for the model architecture and training, and city96 for the ComfyUI-GGUF infrastructure. This repository provides the ComfyUI integration and experimental quantization loaders.
