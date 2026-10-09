@@ -4,6 +4,7 @@ Does not import or modify the W4A8/FP32 nodes. Share the original Iris
 conditioning node via the existing IRIS3B_CONDITIONING interface.
 """
 import gc
+import os
 import importlib
 import sys
 import types
@@ -172,7 +173,14 @@ class Iris3BGGUFCheckpoint:
     """Drop-in checkpoint for the ORIGINAL Iris Qwen encoder."""
     @classmethod
     def INPUT_TYPES(cls):
-        names = [name for name in folder_paths.get_filename_list("checkpoints") if name.lower().endswith(".gguf")]
+        # The standard Comfy checkpoint list filters out GGUF by extension.
+        names = set()
+        for root in folder_paths.get_folder_paths("checkpoints"):
+            for directory, _subdirs, filenames in os.walk(root):
+                for filename in filenames:
+                    if filename.lower().endswith(".gguf"):
+                        names.add(os.path.relpath(os.path.join(directory, filename), root))
+        names = sorted(names, key=str.casefold)
         return {"required": {"checkpoint": (names or ["<no GGUF files>"],)}}
 
     RETURN_TYPES = ("IRIS3B_CHECKPOINT",)
