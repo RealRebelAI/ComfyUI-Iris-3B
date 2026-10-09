@@ -46,22 +46,38 @@ Iris 3B Checkpoint ─────┬─> Iris 3B Qwen3-VL Encode
 
 **Reference settings:** 1024×1024 (or a native ~1MP aspect ratio), 100 steps, CFG 3, shift 4, order 2, BF16 autocast. The author showcases generation at approximately one megapixel; reducing the resolution drastically produced visible block/grid artifacts during our early tests.
 
-## GGUF — optional isolated addon
+## GGUF — automatically registered inside this repository
 
-The `gguf_addon/` directory is **not part of the base node implementation**. Install its contents as a separate ComfyUI custom-node folder:
+The optional `gguf_addon/` folder is included **inside the main Iris repository**.
+The main `__init__.py` registers its two GGUF nodes automatically. There is no
+separate Iris addon installation. The working FP32/W4A8 `nodes.py` is unchanged.
 
 ```text
 ComfyUI/custom_nodes/
-  ComfyUI-Iris3B/             # Existing base nodes, leave unchanged
-  ComfyUI-GGUF/               # city96 backend
-  ComfyUI-Iris3B-GGUF-Addon/  # Copy the files from gguf_addon/ here
+  ComfyUI-Iris3B/
+    __init__.py
+    nodes.py                    # Original FP32/W4A8 pipeline
+    gguf_addon/
+      __init__.py
+      gguf_nodes.py             # Separate experimental GGUF sampler
+    third_party/iris-3b/src/    # Installed upstream Iris source
+  ComfyUI-GGUF/                 # External city96 dependency for GGUF only
 ```
 
-Then choose the **Iris 3B GGUF Checkpoint** and feed its output to the **existing Iris 3B Qwen3-VL Encode** node and to the **Iris 3B GGUF Sampler (Experimental)**. The addon uses unique node IDs and doesn't replace or rewrite the W4A8/FP32 sampler.
+For GGUF, install [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF)
+under `custom_nodes/`; this is the only additional custom-node dependency.
 
-GGUF files belong in `ComfyUI/models/checkpoints/Iris-3B/` and can be downloaded from [Rebel AI's Iris GGUF repository](https://huggingface.co/realrebelai/iris-3b_GGUFs). A custom Iris-specific ComfyUI backend is required — these GGUFs are not llama.cpp chat models.
+Connect **Iris 3B GGUF Checkpoint** to the existing **Iris 3B Qwen3-VL Encode**
+and to **Iris 3B GGUF Sampler (Experimental)**. Connect encoder conditioning
+to the GGUF sampler and sampler output to **Save Image**.
 
-For installation steps, use [gguf_addon/README.md](gguf_addon/README.md).
+Put GGUF weights under `ComfyUI/models/checkpoints/Iris-3B/`.
+Downloads: [Rebel AI Iris GGUF weights](https://huggingface.co/realrebelai/iris-3b_GGUFs).
+
+**Status:** GGUF inference remains experimental and has not been validated
+end-to-end on a real GPU. The known-good safetensors pipeline remains separate.
+
+See [gguf_addon/README.md](gguf_addon/README.md) for requirements.
 
 ## Image restoration and editing
 
