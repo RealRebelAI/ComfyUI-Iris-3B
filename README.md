@@ -20,7 +20,7 @@ Iris-3B is an open-weights, 3-billion-parameter pixel-space diffusion transforme
 
 - ComfyUI and Python 3.11+ with a CUDA-capable NVIDIA GPU.
 - `torch`, `transformers`, `omegaconf`, `safetensors`, `accelerate`, and Iris's upstream source code.
-- A working **Qwen3-VL-4B-Instruct** text encoder installation (downloaded from Hugging Face on first use).
+- A **Qwen3-VL-4B** text encoder in `models/text_encoders` (safetensors, or GGUF via ComfyUI-GGUF). Load it with **Load CLIP** (or **CLIPLoader (GGUF)**, type `qwen_image`/auto) and connect its `CLIP` output to **Iris 3B Qwen3-VL Encode**. Nothing is downloaded automatically.
 - For GGUF only: [city96/ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) installed separately.
 
 ## Install base Iris nodes
@@ -88,7 +88,7 @@ See the [original Iris model card](https://huggingface.co/speridlabs/iris-3b) fo
 ## Known limitations
 
 - The W4A8 code is sensitive to model-specific quantization metadata; use tested converters and compatible ComfyUI releases.
-- Qwen3-VL is a separate, memory-intensive text encoder; `.gguf` here refers to **the diffusion model only**.
+- Qwen3-VL is loaded by a separate Load CLIP / CLIPLoader (GGUF) node, so its format is independent of the diffusion model's.
 - GGUF loading is experimental; checkpoint schema, tensor shapes, CUDA memory requirements, and final image quality should be tested on each release.
 - Native 1024px generation uses considerably more memory than 512px. Quantization does not eliminate activation memory usage.
 - Keep known-good versions backed up before installing updates.

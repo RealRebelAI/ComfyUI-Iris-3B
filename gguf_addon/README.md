@@ -14,7 +14,7 @@ The base `nodes.py` is **not** modified. The new nodes have unique IDs:
 
 ## Graph
 
-`Iris 3B GGUF Checkpoint` feeds BOTH the existing `Iris 3B Qwen3-VL Encode` and the `Iris 3B GGUF Sampler (Experimental)`. Feed the encoder's conditioning into the GGUF sampler, then connect the sampler to `Save Image`.
+`Iris 3B GGUF Checkpoint` feeds BOTH the existing `Iris 3B Qwen3-VL Encode` (which also needs a `CLIP` from Load CLIP / CLIPLoader (GGUF)) and the `Iris 3B GGUF Sampler (Experimental)`. Feed the encoder's conditioning into the GGUF sampler, then connect the sampler to `Save Image`.
 
 Use 1024×1024, 100 steps, CFG 3.0, shift 4.0, order 2 as a reference baseline.
 

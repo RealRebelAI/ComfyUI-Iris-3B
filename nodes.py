@@ -20,9 +20,6 @@ IRIS_PROMPT_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
 THIS_DIR = Path(__file__).resolve().parent
 THIRD_PARTY_SRC = THIS_DIR / "third_party" / "iris-3b" / "src"
 
-TEXT_ENCODER_PRESETS = {
-    "Qwen3-VL-4B-Instruct (HF baseline)": "Qwen/Qwen3-VL-4B-Instruct",
-}
 
 
 def _add_iris_source():
@@ -254,10 +251,7 @@ class Iris3BQwenEncode:
                 "iris_checkpoint": ("IRIS3B_CHECKPOINT",),
                 "prompt": ("STRING", {"multiline": True, "default": "a red fox sleeping in fresh snow, realistic wildlife photography"}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "text_encoder": (list(TEXT_ENCODER_PRESETS.keys()),),
-                "load_mode": (["auto", "cpu", "cuda"], {"default": "auto"}),
-                "gpu_memory_mb": ("INT", {"default": 6200, "min": 1024, "max": 65536, "step": 128}),
-                "cpu_memory_mb": ("INT", {"default": 8192, "min": 2048, "max": 131072, "step": 256}),
+                "clip": ("CLIP", {"tooltip": "Qwen3-VL-4B from Load CLIP / CLIPLoader (GGUF)."}),
             }
         }
 
@@ -266,91 +260,58 @@ class Iris3BQwenEncode:
     FUNCTION = "encode"
     CATEGORY = "Rebel AI/Iris 3B"
 
-    def encode(self, iris_checkpoint, prompt, negative_prompt, text_encoder, load_mode, gpu_memory_mb, cpu_memory_mb):
-        _add_iris_source()
-        from transformers import AutoTokenizer, Qwen3VLForConditionalGeneration
+    def encode(self, iris_checkpoint, prompt, negative_prompt, clip):
+        import comfy.model_management as model_management
 
-        model_id = TEXT_ENCODER_PRESETS[text_encoder]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        clip_wrapper = clip.cond_stage_model
+        clip_model = getattr(clip_wrapper, getattr(clip_wrapper, "clip", ""), None)
+        transformer = getattr(clip_model, "transformer", None)
+        layers = getattr(getattr(transformer, "model", None), "layers", None)
+        if layers is None or len(layers) <= IRIS_HIDDEN_LAYERS[-1]:
+            raise RuntimeError(
+                "The connected CLIP is not a Qwen3-VL-4B text encoder "
+                f"(36 decoder layers required, got {0 if layers is None else len(layers)}). "
+                "Load Qwen3-VL-4B with Load CLIP or CLIPLoader (GGUF)."
+            )
 
-        kwargs = {
-            "dtype": torch.bfloat16,
-            "attn_implementation": "sdpa",
-            "low_cpu_mem_usage": True,
-        }
+        hidden = getattr(transformer.model.layers[0].self_attn.q_proj, "in_features", 2560)
+        if hidden != 2560:
+            raise RuntimeError(f"Hidden size {hidden} does not match Iris (2560); use the 4B Qwen3-VL encoder, not 8B.")
 
-        if load_mode == "auto" and torch.cuda.is_available():
-            kwargs["device_map"] = "auto"
-            kwargs["max_memory"] = {
-                0: f"{int(gpu_memory_mb)}MiB",
-                "cpu": f"{int(cpu_memory_mb)}MiB",
-            }
-
-        model = Qwen3VLForConditionalGeneration.from_pretrained(model_id, **kwargs)
-
-        if load_mode == "cpu":
-            model = model.to("cpu")
-        elif load_mode == "cuda":
-            if not torch.cuda.is_available():
-                raise RuntimeError("CUDA selected but CUDA is not available.")
-            model = model.to("cuda")
-
-        model.eval()
-        decoder = model.get_decoder()
-        decoder.eval()
-        decoder.requires_grad_(False)
+        tokenizer_wrapper = getattr(clip.tokenizer, clip.tokenizer.clip_name)
+        tokenizer = tokenizer_wrapper.tokenizer
 
         input_ids, attention_mask, start, stop = _build_prompt_batch(
             tokenizer, [prompt, negative_prompt], max_length=300
         )
 
-        try:
-            embed_device = decoder.get_input_embeddings().weight.device
-        except Exception:
-            embed_device = next(decoder.parameters()).device
+        model_management.load_model_gpu(clip.patcher)
+        device = clip.patcher.load_device
+        input_ids = input_ids.to(device)
+        attention_mask = attention_mask.to(device)
 
-        input_ids = input_ids.to(embed_device)
-        attention_mask = attention_mask.to(embed_device)
+        with torch.inference_mode():
+            # Hidden state k is the output after k layers, as in HF hidden_states[k].
+            _, intermediate = transformer(
+                input_ids,
+                attention_mask=attention_mask,
+                intermediate_output=list(IRIS_HIDDEN_LAYERS),
+                final_layer_norm_intermediate=False,
+                dtype=torch.float32,
+            )
 
-        try:
-            with torch.inference_mode():
-                output = decoder(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    use_cache=False,
-                    return_dict=True,
-                    output_hidden_states=True,
-                )
+        mask = attention_mask[:, start:stop].to("cpu", dtype=torch.int64)
+        # (B, layers, L, H) -> (B, L, layers, H)
+        embeddings = intermediate[:, :, start:stop].permute(0, 2, 1, 3)
+        embeddings = embeddings.detach().to("cpu", dtype=torch.bfloat16)
+        embeddings = embeddings * mask[:, :, None, None].to(embeddings.dtype)
 
-            if output.hidden_states is None or len(output.hidden_states) <= IRIS_HIDDEN_LAYERS[-1]:
-                raise RuntimeError(
-                    f"Qwen3-VL returned only {0 if output.hidden_states is None else len(output.hidden_states)} "
-                    f"hidden-state entries; Iris needs layer {IRIS_HIDDEN_LAYERS[-1]}."
-                )
-
-            mask = attention_mask[:, start:stop].to("cpu", dtype=torch.int64)
-
-            selected = [
-                output.hidden_states[layer][:, start:stop].detach().to("cpu", dtype=torch.bfloat16)
-                for layer in IRIS_HIDDEN_LAYERS
-            ]
-            embeddings = torch.stack(selected, dim=2)
-            embeddings = embeddings * mask[:, :, None, None].to(embeddings.dtype)
-
-            conditioning = {
-                "positive": embeddings[0:1].contiguous(),
-                "positive_mask": mask[0:1].contiguous(),
-                "negative": embeddings[1:2].contiguous(),
-                "negative_mask": mask[1:2].contiguous(),
-            }
-        finally:
-            try:
-                del output
-            except Exception:
-                pass
-            del decoder
-            del model
-            _cleanup_cuda()
+        return ({
+            "positive": embeddings[0:1].contiguous(),
+            "positive_mask": mask[0:1].contiguous(),
+            "negative": embeddings[1:2].contiguous(),
+            "negative_mask": mask[1:2].contiguous(),
+        },)
 
         return (conditioning,)
 
